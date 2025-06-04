@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>飞机大战</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        #ip-display {
+            margin-top: 1rem;
+            padding: 0.5rem;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="menu" class="screen">
+            <h1>飞机大战</h1>
+            <div class="version-select">
+                <label>
+                    <input type="radio" name="version" value="new" checked> 新版
+                </label>
+                <label>
+                    <input type="radio" name="version" value="original"> 原版
+                </label>
+            </div>
+            <div id="ip-display">正在获取 IP 地址...</div>
+            <button id="create-room">创建房间</button>
+            <button id="join-room">加入房间</button>
+        </div>
+
+        <div id="room-list" class="screen hidden">
+            <h2>选择房间</h2>
+            <div id="rooms"></div>
+            <button id="back-to-menu">返回主菜单</button>
+        </div>
+
+        <div id="design-screen" class="screen hidden">
+            <h2>设计飞机</h2>
+            <div id="design-container">
+                <div id="design-board"></div>
+                <div id="design-controls">
+                    <button id="reset-design">重置设计</button>
+                    <button id="complete-design">完成设计</button>
+                </div>
+                <div id="design-status"></div>
+                <div>当前设计第 <span id="current-plane">1</span> 架飞机</div>
+            </div>
+        </div>
+
+        <div id="game-screen" class="screen hidden">
+            <div id="boards-container">
+                <div class="board-container">
+                    <h3>我的棋盘</h3>
+                    <div id="my-board">
+                        <div class="board"></div>
+                    </div>
+                </div>
+                <div class="board-container">
+                    <h3>对手棋盘</h3>
+                    <div id="opponent-board">
+                        <div class="board"></div>
+                    </div>
+                </div>
+            </div>
+            <div id="game-status"></div>
+        </div>
+    </div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="game.js"></script>
+    <script>
+        async function getIP() {
+            try {
+                const response = await fetch('/api/ip');
+                const data = await response.json();
+                document.getElementById('ip-display').textContent = `您的 IP 地址：${data.ip}`;
+            } catch (error) {
+                document.getElementById('ip-display').textContent = '无法获取 IP 地址';
+                console.error('Error:', error);
+            }
+        }
+
+        getIP();
+    </script>
+</body>
+</html> 

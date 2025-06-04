@@ -1,0 +1,16 @@
+{
+  "name": "airplane-battle",
+  "version": "1.0.0",
+  "description": "A multiplayer airplane battle game",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "express": "^4.17.1",
+    "socket.io": "^4.4.1"
+  }
+} 
