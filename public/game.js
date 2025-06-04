@@ -902,19 +902,26 @@ document.getElementById('create-room').addEventListener('click', () => {
     });
 });
 
-document.getElementById('join-room').addEventListener('click', () => {
-    resetGameData();
+// 添加刷新房间列表的功能
+function refreshRoomList() {
     socket.emit('getRooms', (rooms) => {
-        console.log('获取到房间列表：', rooms);
+        console.log('刷新房间列表：', rooms);
         roomsList.innerHTML = '';
         rooms.forEach(room => {
-            const li = document.createElement('li');
-            li.textContent = `房间 ${room.id} (${room.players}/2) - ${room.version === 'original' ? '原版' : '新版'}`;
-            li.addEventListener('click', () => {
+            const roomButton = document.createElement('button');
+            roomButton.className = 'room-button';
+            roomButton.innerHTML = `
+                <div class="room-info">
+                    <span class="room-id">房间 ${room.id}</span>
+                    <span class="room-players">(${room.players}/2)</span>
+                    <span class="room-version">${room.version === 'original' ? '原版' : '新版'}</span>
+                </div>
+            `;
+            roomButton.addEventListener('click', () => {
                 console.log('尝试加入房间：', room.id);
                 currentRoom = room.id;
                 gameVersion = room.version;
-                socket.emit('joinRoom', room.id, (success) => {
+                socket.emit('joinRoom', room.id, (success, message) => {
                     if (success) {
                         console.log('成功加入房间：', room.id);
                         if (gameVersion === 'original') {
@@ -945,18 +952,32 @@ document.getElementById('join-room').addEventListener('click', () => {
                             showRules('design');
                         }
                     } else {
-                        console.log('加入房间失败：', room.id);
-                        alert('加入房间失败，请重试');
+                        console.log('加入房间失败：', message);
+                        alert(message || '加入房间失败，请重试');
                     }
                 });
             });
-            roomsList.appendChild(li);
+            roomsList.appendChild(roomButton);
         });
-        showScreen(roomListScreen);
     });
+}
+
+// 修改加入房间按钮的点击事件
+document.getElementById('join-room').addEventListener('click', () => {
+    resetGameData();
+    refreshRoomList();
+    showScreen(roomListScreen);
 });
 
+// 添加刷新按钮的点击事件
+document.getElementById('refresh-rooms').addEventListener('click', refreshRoomList);
+
 document.getElementById('back-to-menu').addEventListener('click', () => {
+    if (currentRoom) {
+        // 主动离开房间
+        socket.emit('leaveRoom', currentRoom);
+        currentRoom = null; // 清除当前房间ID
+    }
     resetGameData();
     showScreen(menuScreen);
 });
@@ -965,10 +986,10 @@ document.getElementById('reset-design').addEventListener('click', resetDesign);
 document.getElementById('complete-design').addEventListener('click', completeDesign);
 
 // Socket.io 事件处理
-socket.on('playerJoined', () => {
+socket.on('playerJoined', (data) => {
     const roomStatus = document.getElementById('room-status');
     if (roomStatus) {
-        roomStatus.textContent = '对手已加入房间，等待对手准备...';
+        roomStatus.textContent = `对手已加入房间，当前玩家数：${data.playersCount}/2`;
     }
     gameStatus.textContent = '等待对手准备...';
 });
@@ -1084,36 +1105,70 @@ socket.on('turnChanged', (nextTurn) => {
     updateGameStatus();
 });
 
-socket.on('playerDisconnected', () => {
+socket.on('playerDisconnected', (phase) => {
     const roomStatus = document.getElementById('room-status');
     if (roomStatus) {
         roomStatus.textContent = '对手已断开连接，等待新对手加入...';
     }
     gameStatus.textContent = '对手已断开连接';
     
-    // 重置游戏状态
-    placedAirplanes = 0;
-    myBoard = [];
-    myVisibleBoard.clear();
-    myAttackedCells.clear();
-    currentRotation = 0;
-    
-    // 清除棋盘
-    document.querySelectorAll('#my-board .cell, #opponent-board .cell').forEach(cell => {
-        cell.className = 'cell';
-    });
-    
-    // 移除游戏结束按钮
-    const buttonContainer = document.querySelector('.game-over-buttons');
-    if (buttonContainer) {
-        buttonContainer.remove();
+    if (phase === 'battle') {
+        // 如果是在战斗阶段断开，重置所有游戏数据
+        placedAirplanes = 0;
+        myBoard = [];
+        myVisibleBoard.clear();
+        myAttackedCells.clear();
+        currentRotation = 0;
+        radarUsed = false;
+        moveModeActive = false;
+        selectedPlaneForMove = null;
+        movedPlanes.clear();
+        originalPlanePosition = null;
+        lastOpponentAction = null;
+        
+        // 清除所有视觉效果
+        document.querySelectorAll('#my-board .cell, #opponent-board .cell').forEach(cell => {
+            cell.className = 'cell';
+        });
+        
+        // 移除游戏结束按钮
+        const buttonContainer = document.querySelector('.game-over-buttons');
+        if (buttonContainer) {
+            buttonContainer.remove();
+        }
+        
+        // 返回设计界面
+        showScreen(designScreen);
+        initializeDesignBoard();
+        currentPlaneSpan.textContent = '1';
+        designStatus.textContent = '';
+        
+        // 如果是原版，自动设置飞机设计
+        if (gameVersion === 'original') {
+            designedAirplanes = [originalAirplaneDesign, originalAirplaneDesign, originalAirplaneDesign];
+            socket.emit('playerDesigned', currentRoom, designedAirplanes);
+            showScreen(gameScreen);
+            initializeBoard();
+            placedAirplanes = 0;
+            myBoard = [];
+            document.querySelectorAll('#my-board .cell').forEach(cell => {
+                cell.style.cursor = 'pointer';
+            });
+            const rotateButton = document.getElementById('rotate-button');
+            if (rotateButton) {
+                rotateButton.disabled = false;
+                rotateButton.style.opacity = '1';
+                rotateButton.style.cursor = 'pointer';
+            }
+            gameStatus.textContent = '请放置你的飞机（按R键旋转）';
+            showRules('placement');
+        }
+    } else {
+        // 如果是在设计或放置阶段断开，只更新状态显示
+        if (roomStatus) {
+            roomStatus.textContent = '对手已断开连接，等待新对手加入...';
+        }
     }
-    
-    // 返回设计界面
-    showScreen(designScreen);
-    initializeDesignBoard();
-    currentPlaneSpan.textContent = '1';
-    designStatus.textContent = '';
 });
 
 socket.on('gameOver', (winnerId) => {

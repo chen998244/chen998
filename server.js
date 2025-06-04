@@ -64,6 +64,14 @@ io.on('connection', (socket) => {
 
     // 创建房间
     socket.on('createRoom', (version, callback) => {
+        // 清理该玩家之前创建的所有空房间
+        for (const [roomId, room] of rooms.entries()) {
+            if (room.players.size === 0) {
+                rooms.delete(roomId);
+                console.log(`清理空房间：${roomId}`);
+            }
+        }
+
         const roomId = Math.random().toString(36).substring(2, 8);
         const room = new Room(version);
         room.players.set(socket.id, true);
@@ -75,6 +83,26 @@ io.on('connection', (socket) => {
 
     // 获取可用房间列表
     socket.on('getRooms', (callback) => {
+        // 清理无效房间
+        for (const [roomId, room] of rooms.entries()) {
+            // 检查房间中的玩家是否都还在线
+            const validPlayers = Array.from(room.players.keys()).filter(playerId => {
+                const playerSocket = io.sockets.sockets.get(playerId);
+                return playerSocket && playerSocket.connected;
+            });
+            
+            // 如果房间中没有有效玩家，删除房间
+            if (validPlayers.length === 0) {
+                rooms.delete(roomId);
+                console.log(`清理无效房间：${roomId}`);
+                continue;
+            }
+            
+            // 更新房间的玩家列表，只保留在线玩家
+            room.players.clear();
+            validPlayers.forEach(playerId => room.players.set(playerId, true));
+        }
+        
         const availableRooms = Array.from(rooms.entries())
             .filter(([_, room]) => room.players.size < 2)
             .map(([id, room]) => ({
@@ -89,13 +117,29 @@ io.on('connection', (socket) => {
     socket.on('joinRoom', (roomId, callback) => {
         const room = rooms.get(roomId);
         if (room && room.players.size < 2) {
+            // 检查房间是否在战斗阶段
+            const gameInBattlePhase = room.airplanes.size === 2;
+            
+            // 如果是战斗阶段，不允许新玩家加入
+            if (gameInBattlePhase) {
+                callback(false, '房间已开始游戏，无法加入');
+                return;
+            }
+            
             room.players.set(socket.id, true);
             socket.join(roomId);
-            io.to(roomId).emit('playerJoined');
+            
+            // 通知房间内所有玩家
+            io.to(roomId).emit('playerJoined', {
+                playerId: socket.id,
+                playersCount: room.players.size,
+                gamePhase: gameInBattlePhase ? 'battle' : 'design'
+            });
+            
             callback(true);
             console.log(`用户 ${socket.id} 加入房间 ${roomId}，当前房间玩家数：${room.players.size}`);
         } else {
-            callback(false);
+            callback(false, '房间已满或不存在');
             console.log(`用户 ${socket.id} 加入房间 ${roomId} 失败`);
         }
     });
@@ -343,18 +387,92 @@ io.on('connection', (socket) => {
     // 断开连接处理
     socket.on('disconnect', () => {
         console.log('用户已断开连接');
+        const roomsToDelete = new Set();
+        
         rooms.forEach((room, roomId) => {
             if (room.players.has(socket.id)) {
-                 console.log(`用户 ${socket.id} 从房间 ${roomId} 断开连接`);
-                room.players.delete(socket.id);
-                io.to(roomId).emit('playerDisconnected');
-                // 如果房间里沒有人了，删除房间
+                console.log(`用户 ${socket.id} 从房间 ${roomId} 断开连接`);
+                
+                // 获取房间中的另一个玩家
+                const remainingPlayers = Array.from(room.players.keys()).filter(id => id !== socket.id);
+                const remainingPlayer = remainingPlayers[0];
+                
+                // 检查游戏是否已经进入战斗阶段（双方都放置好飞机）
+                const gameInBattlePhase = room.airplanes.size === 2;
+                
+                if (remainingPlayer) {
+                    if (gameInBattlePhase) {
+                        // 如果已经进入战斗阶段，清除所有游戏数据
+                        room.players.delete(socket.id);
+                        room.airplanes.clear();
+                        room.designedAirplanes.clear();
+                        room.boards.clear();
+                        room.currentTurn = null;
+                        room.radarUsed.clear();
+                        
+                        // 通知剩余玩家重置到设计阶段
+                        io.to(remainingPlayer).emit('playerDisconnected', 'battle');
+                    } else {
+                        // 如果还没进入战斗阶段，只移除断开连接的玩家
+                        room.players.delete(socket.id);
+                        // 通知剩余玩家对手断开连接，但保持当前状态
+                        io.to(remainingPlayer).emit('playerDisconnected', 'design');
+                    }
+                }
+                
+                // 如果房间里没有人了，标记房间为待删除
                 if (room.players.size === 0) {
-                    rooms.delete(roomId);
-                     console.log(`房间 ${roomId} 已清空并删除`);
+                    roomsToDelete.add(roomId);
+                    console.log(`房间 ${roomId} 已清空，准备删除`);
                 }
             }
         });
+        
+        // 删除所有空房间
+        roomsToDelete.forEach(roomId => {
+            rooms.delete(roomId);
+            console.log(`房间 ${roomId} 已删除`);
+        });
+    });
+
+    // 离开房间的处理
+    socket.on('leaveRoom', (roomId) => {
+        const room = rooms.get(roomId);
+        if (room) {
+            console.log(`用户 ${socket.id} 主动离开房间 ${roomId}`);
+            
+            // 检查游戏是否已经进入战斗阶段
+            const gameInBattlePhase = room.airplanes.size === 2;
+            
+            // 如果是在战斗阶段，清除所有游戏数据
+            if (gameInBattlePhase) {
+                room.airplanes.clear();
+                room.designedAirplanes.clear();
+                room.boards.clear();
+                room.currentTurn = null;
+                room.radarUsed.clear();
+            }
+            
+            room.players.delete(socket.id);
+            
+            // 获取房间中的另一个玩家
+            const remainingPlayers = Array.from(room.players.keys());
+            const remainingPlayer = remainingPlayers[0];
+            
+            if (remainingPlayer) {
+                // 通知剩余玩家
+                io.to(remainingPlayer).emit('playerDisconnected', gameInBattlePhase ? 'battle' : 'design');
+            }
+            
+            // 如果房间里没有人了，删除房间
+            if (room.players.size === 0) {
+                rooms.delete(roomId);
+                console.log(`房间 ${roomId} 已清空并删除`);
+            }
+            
+            // 让玩家离开房间
+            socket.leave(roomId);
+        }
     });
 });
 
